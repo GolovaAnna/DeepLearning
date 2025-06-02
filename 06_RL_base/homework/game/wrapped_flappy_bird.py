@@ -30,6 +30,7 @@ PLAYER_INDEX_GEN = cycle([0, 1, 2, 1])
 class GameState:
     def __init__(self):
         self.score = self.playerIndex = self.loopIter = 0
+        self.bestScore = 0
         self.playerx = int(SCREENWIDTH * 0.2)
         self.playery = int((SCREENHEIGHT - PLAYER_HEIGHT) / 2)
         self.basex = 0
@@ -88,16 +89,16 @@ class GameState:
         self.loopIter = (self.loopIter + 1) % 30
         self.basex = -((-self.basex + 100) % self.baseShift)
 
-        # rotate player
-        if self.playerRot > -90:
-            self.playerRot -= self.playerVelRot
+        # # rotate player
+        # if self.playerRot > -90:
+        #     self.playerRot -= self.playerVelRot
 
         # player's movement
         if self.playerVelY < self.playerMaxVelY and not self.playerFlapped:
             self.playerVelY += self.playerAccY
-        if self.playerFlapped:
-            self.playerFlapped = False
-            self.playerRot += 45
+        # if self.playerFlapped:
+        #     self.playerFlapped = False
+        #     self.playerRot += 45
         self.playery += min(self.playerVelY, BASEY - self.playery - PLAYER_HEIGHT)
         if self.playery < 0:
             self.playery = 0
@@ -107,7 +108,7 @@ class GameState:
             uPipe['x'] += self.pipeVelX
             lPipe['x'] += self.pipeVelX
 
-        # add new pipe when first pipe is about to touch left of screen
+# add new pipe when first pipe is about to touch left of screen
         if 0 < self.upperPipes[0]['x'] < 5:
             newPipe = getRandomPipe()
             self.upperPipes.append(newPipe[0])
@@ -167,6 +168,8 @@ class GameState:
         playerSurface = pygame.transform.rotate(IMAGES['player'][self.playerIndex], visibleRot)
         SCREEN.blit(playerSurface, (self.playerx, self.playery))
 
+        showScore(self.score)
+
         image_data = pygame.surfarray.array3d(pygame.display.get_surface())
         pygame.display.update()
         FPSCLOCK.tick(FPS)
@@ -219,22 +222,22 @@ def checkCrash(player, upperPipes, lowerPipes):
         playerRect = pygame.Rect(player['x'], player['y'],
                                  player['w'], player['h'])
 
-        for uPipe, lPipe in zip(upperPipes, lowerPipes):
-            # upper and lower pipe rects
-            uPipeRect = pygame.Rect(uPipe['x'], uPipe['y'], PIPE_WIDTH, PIPE_HEIGHT)
-            lPipeRect = pygame.Rect(lPipe['x'], lPipe['y'], PIPE_WIDTH, PIPE_HEIGHT)
+    for uPipe, lPipe in zip(upperPipes, lowerPipes):
+                # upper and lower pipe rects
+                uPipeRect = pygame.Rect(uPipe['x'], uPipe['y'], PIPE_WIDTH, PIPE_HEIGHT)
+                lPipeRect = pygame.Rect(lPipe['x'], lPipe['y'], PIPE_WIDTH, PIPE_HEIGHT)
 
-            # player and upper/lower pipe hitmasks
-            pHitMask = HITMASKS['player'][pi]
-            uHitmask = HITMASKS['pipe'][0]
-            lHitmask = HITMASKS['pipe'][1]
+                # player and upper/lower pipe hitmasks
+                pHitMask = HITMASKS['player'][pi]
+                uHitmask = HITMASKS['pipe'][0]
+                lHitmask = HITMASKS['pipe'][1]
 
-            # if bird collided with upipe or lpipe
-            uCollide = pixelCollision(playerRect, uPipeRect, pHitMask, uHitmask)
-            lCollide = pixelCollision(playerRect, lPipeRect, pHitMask, lHitmask)
+                # if bird collided with upipe or lpipe
+                uCollide = pixelCollision(playerRect, uPipeRect, pHitMask, uHitmask)
+                lCollide = pixelCollision(playerRect, lPipeRect, pHitMask, lHitmask)
 
-            if uCollide or lCollide:
-                return True
+                if uCollide or lCollide:
+                    return True
 
     return False
 

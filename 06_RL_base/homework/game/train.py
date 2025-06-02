@@ -1,3 +1,4 @@
+import os
 import random
 import numpy as np
 import torch
@@ -6,7 +7,15 @@ import torch.optim as optim
 from collections import deque
 from wrapped_flappy_bird import GameState, SCREENHEIGHT, SCREENWIDTH
 
+# os.environ['WANDB_MODE'] = 'offline'
+import wandb
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+num_episodes = 5000
+max_steps_per_episode = 10000
+
+game = GameState()
 
 class DQN(nn.Module):
     def __init__(self, input_dim, output_dim):
@@ -23,20 +32,47 @@ class DQN(nn.Module):
         return self.net(x)
 
 
-class ReplayBuffer:
-    def __init__(self, capacity):
-        self.buffer = deque(maxlen=capacity)
+class PrioritizedReplayBuffer:
+    def __init__(self, capacity, alpha=0.6):
+        self.capacity = capacity
+        self.buffer = []
+        self.priorities = []
+        self.alpha = alpha
+        self.pos = 0
 
     def push(self, state, action, reward, next_state, done):
-        self.buffer.append((state, action, reward, next_state, done))
+        max_priority = max(self.priorities, default=1.0)
+        if len(self.buffer) < self.capacity:
+            self.buffer.append((state, action, reward, next_state, done))
+            self.priorities.append(max_priority)
+        else:
+            self.buffer[self.pos] = (state, action, reward, next_state, done)
+            self.priorities[self.pos] = max_priority
+            self.pos = (self.pos + 1) % self.capacity
 
-    def sample(self, batch_size):
-        batch = random.sample(self.buffer, batch_size)
-        states, actions, rewards, next_states, dones = map(np.array, zip(*batch))
-        return states, actions, rewards, next_states, dones
+    def sample(self, batch_size, beta=0.4):
+        priorities = np.array(self.priorities)
+        probs = priorities ** self.alpha
+        probs /= probs.sum()
+
+        indices = np.random.choice(len(self.buffer), batch_size, p=probs)
+        samples = [self.buffer[i] for i in indices]
+
+        total = len(self.buffer)
+        weights = (total * probs[indices]) ** (-beta)
+        weights /= weights.max()
+        weights = np.array(weights, dtype=np.float32)
+
+        states, actions, rewards, next_states, dones = map(np.array, zip(*samples))
+        return states, actions, rewards, next_states, dones, indices, weights
+
+    def update_priorities(self, indices, td_errors):
+        for i, error in zip(indices, td_errors):
+            self.priorities[i] = abs(error) + 1e-5  # avoid zero
 
     def __len__(self):
         return len(self.buffer)
+
 
 
 class FlappyBirdAgent:
@@ -50,15 +86,25 @@ class FlappyBirdAgent:
         self.target_net.eval()
 
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=1e-3)
-        self.replay_buffer = ReplayBuffer(10000)
+        self.replay_buffer = PrioritizedReplayBuffer(10000)
 
         self.batch_size = 64
         self.gamma = 0.99  # discount factor
-        self.epsilon = 1.0  # exploration rate
+        self.epsilon = 1  # exploration rate
         self.epsilon_min = 0.01
         self.epsilon_decay = 0.9995
         self.update_target_every = 1000  # steps to update target network
         self.step_count = 0
+
+        wandb.init(project="flappy-bird-dqn", name='', config={
+            "episodes": num_episodes,
+            "gamma": self.gamma,
+            "epsilon_start": self.epsilon,
+            "epsilon_min":self.epsilon_min,
+            "epsilon_decay": self.epsilon_decay,
+            "batch_size": self.batch_size,
+            "lr": 1e-3,
+        })
 
     def select_action(self, state):
         self.step_count += 1
@@ -77,60 +123,68 @@ class FlappyBirdAgent:
         if len(self.replay_buffer) < self.batch_size:
             return
 
-        states, actions, rewards, next_states, dones = self.replay_buffer.sample(self.batch_size)
+        states, actions, rewards, next_states, dones, indices, weights = self.replay_buffer.sample(self.batch_size)
         states = torch.tensor(states, dtype=torch.float32).to(device)
         actions = torch.tensor(actions, dtype=torch.int64).unsqueeze(1).to(device)
         rewards = torch.tensor(rewards, dtype=torch.float32).unsqueeze(1).to(device)
         next_states = torch.tensor(next_states, dtype=torch.float32).to(device)
         dones = torch.tensor(dones, dtype=torch.float32).unsqueeze(1).to(device)
+        weights = torch.tensor(weights, dtype=torch.float32).unsqueeze(1).to(device)
 
-        # Q(s,a)
         current_q_values = self.policy_net(states).gather(1, actions)
-        # max_a' Q_target(s',a')
         with torch.no_grad():
             max_next_q_values = self.target_net(next_states).max(1)[0].unsqueeze(1)
-        expected_q_values = rewards + (self.gamma * max_next_q_values * (1 - dones))
+        expected_q_values = rewards + self.gamma * max_next_q_values * (1 - dones)
 
-        loss = nn.MSELoss()(current_q_values, expected_q_values)
+        td_errors = (expected_q_values - current_q_values).detach().cpu().numpy().flatten()
+        self.replay_buffer.update_priorities(indices, td_errors)
+
+        loss = (weights * (current_q_values - expected_q_values).pow(2)).mean()
 
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
 
-            # Epsilon decay
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
 
-        # Update target network periodically
         if self.step_count % self.update_target_every == 0:
             self.target_net.load_state_dict(self.policy_net.state_dict())
 
 
+
 def get_state(game):
-    # Создаем вектор признаков из текущего состояния игры
-    # Возьмем: позицию птицы, скорость птицы, ближайшие трубы
-    upper_pipe = game.upperPipes[0]
-    lower_pipe = game.lowerPipes[0]
+    upper_pipe_1 = game.upperPipes[0]
+    lower_pipe_1 = game.lowerPipes[0]
+    upper_pipe_2 = game.upperPipes[1] if len(game.upperPipes) > 1 else upper_pipe_1
+    lower_pipe_2 = game.lowerPipes[1] if len(game.lowerPipes) > 1 else lower_pipe_1
+
+    # Центр текущей щели
+    gap_center_y = (upper_pipe_1['y'] + lower_pipe_1['y']) / 2
+    dy_to_gap_center = (game.playery - gap_center_y) / SCREENHEIGHT
 
     state = np.array([
-        game.playery / SCREENHEIGHT,  # нормализуем
+        game.playery / SCREENHEIGHT,
         game.playerVelY / 10,
-        upper_pipe['x'] / SCREENWIDTH,
-        upper_pipe['y'] / SCREENHEIGHT,
-        lower_pipe['x'] / SCREENWIDTH,
-        lower_pipe['y'] / SCREENHEIGHT,
-        game.playerx / SCREENWIDTH
+        upper_pipe_1['x'] / SCREENWIDTH,
+        upper_pipe_1['y'] / SCREENHEIGHT,
+        lower_pipe_1['x'] / SCREENWIDTH,
+        lower_pipe_1['y'] / SCREENHEIGHT,
+        game.playerx / SCREENWIDTH,
+        (upper_pipe_2['y'] + lower_pipe_2['y']) / 2,
+        dy_to_gap_center
     ], dtype=np.float32)
+
     return state
+
 
 
 # === Пример игрового цикла ===
 
-agent = FlappyBirdAgent(state_dim=7, action_dim=2)
-game = GameState()
+agent = FlappyBirdAgent(state_dim=9, action_dim=2)
 
-num_episodes = 1000
-max_steps_per_episode = 10000
+# num_episodes = 1000
+# max_steps_per_episode = 10000
 
 best_reward = -float('inf')  # начальное значение лучшей награды
 
@@ -171,5 +225,18 @@ for episode in range(num_episodes):
                     agent.epsilon *= agent.epsilon_decay
 
             print(f"Episode {episode + 1}, Steps: {step}, Total reward: {total_reward:.2f}, "
-                  f"Best reward: {best_reward:.2f}, Epsilon: {agent.epsilon:.3f}")
+                  f"Best reward: {best_reward:.2f}, Epsilon: {agent.epsilon:.3f}, Score: {game.score}, Best score: {game.bestScore}")
+
             break
+
+    wandb.log({
+        "episode": episode + 1,
+        "reward": total_reward,
+        "best_reward": best_reward,
+        "score": game.score,
+        "best_score": game.bestScore,
+        "epsilon": agent.epsilon
+    })
+    
+
+    
