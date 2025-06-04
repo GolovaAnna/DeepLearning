@@ -1,0 +1,2 @@
+03_Attention/seminar/model_with_pretrain_embs.pt filter=lfs diff=lfs merge=lfs -text
+03_Attention/seminar/model_without_pretrain_embs.pt filter=lfs diff=lfs merge=lfs -text
