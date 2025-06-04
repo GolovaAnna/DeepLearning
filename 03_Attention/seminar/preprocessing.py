@@ -60,7 +60,7 @@ def get_iter(train_dataset, test_dataset):
     return train_iter, test_iter
 
 def prepare_word_field(word_field, dataset):
-    # fasttext.util.download_model('ru', if_exists='ignore')   # выдаст cc.ru.300.bin
+    fasttext.util.download_model('ru', if_exists='ignore')   # выдаст cc.ru.300.bin
     ft_model = fasttext.load_model('D:/05_Attention/05_Attention/seminar/cc.ru.300.bin')
     FT_DIM = ft_model.get_dimension() 
 
@@ -124,8 +124,8 @@ def subsequent_mask(size):
     return mask.unsqueeze(0) == 0
 
 def make_mask(source_inputs, target_inputs, pad_idx):
-    source_mask = (source_inputs != pad_idx).unsqueeze(-2)
-    target_mask = (target_inputs != pad_idx).unsqueeze(-2)
+    source_mask = (source_inputs != pad_idx).unsqueeze(-2) # [bs, 1, sec_len]
+    target_mask = (target_inputs != pad_idx).unsqueeze(-2) # [bs, 1, sec_len] * [sec_len, sec_len] = [bs, sec_len, sec_len]
     target_mask = target_mask & subsequent_mask(target_inputs.size(-1)).type_as(target_mask)
     return source_mask, target_mask
 
@@ -134,5 +134,7 @@ def convert_batch(batch, pad_idx=1):
     source_inputs, target_inputs = batch.source.to(DEVICE).transpose(0, 1), batch.target.to(DEVICE).transpose(0, 1)
     source_inputs, target_inputs = batch.source.to(DEVICE), batch.target.to(DEVICE)
     source_mask, target_mask = make_mask(source_inputs, target_inputs, pad_idx)
+
+    # print(f'размеры source_mask, target_mask: {source_mask.shape, target_mask.shape}')
 
     return source_inputs, target_inputs, source_mask, target_mask

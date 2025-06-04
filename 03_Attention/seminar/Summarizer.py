@@ -1,6 +1,6 @@
 import torch
 
-from preprocessing import make_mask
+from preprocessing_emb import get_model_and_tokenizer, get_embeddings_and_masks
 
 DEVICE = torch.device('cuda')
 
@@ -11,68 +11,77 @@ class Summarizer:
     def __init__(self, model, 
                  device=DEVICE,
                  max_len: int = 5000):
-        self.model = model.to(device)
-        self.word_field = self.model.word_field
+        tokenizer, model_emb = get_model_and_tokenizer() 
+        self.model_emb = model_emb
+        self.model = model
+        self.tokenizer = tokenizer
         self.device = device
         self.max_len = max_len
 
-        self.pad_idx = self.word_field.vocab.stoi[self.word_field.pad_token]
-        self.bos_idx = self.word_field.vocab.stoi[self.word_field.init_token]
-        self.eos_idx = self.word_field.vocab.stoi[self.word_field.eos_token]
+        self.pad_idx = tokenizer.pad_token_id
+        self.cls_idx = tokenizer.cls_token_id
+        self.sep_idx = tokenizer.sep_token_id
 
         self.model.eval()
 
     def _encode(self, text: str) -> list[int]:
 
-        tokens = self.field.preprocess(text)
-        tokens = [self.field.init_token] + tokens + [self.field.eos_token]
-        return [self.field.vocab.stoi.get(t,self.field.vocab.stoi[self.field.unk_token]) for t in tokens]
+        encoded = self.tokenizer(text, padding=True, truncation=True, return_tensors='pt')
+        input_ids = encoded['input_ids'].to(DEVICE)
+        attention_mask = encoded['attention_mask'].to(DEVICE)
+
+        with torch.no_grad():
+            outputs = self.model_emb(input_ids, attention_mask=attention_mask)
+            embeddings = outputs.last_hidden_state
+        return embeddings, attention_mask
 
     def _decode(self, ids: list[int]) -> str:
-        tokens = [self.field.vocab.itos[i] for i in ids]
+        text = self.tokenizer.decode(ids, skip_special_tokens=False)
 
-        # Удалим служебные токены
-        tokens = [t for t in tokens if t not in {self.field.init_token, self.field.eos_token}]
-
-        return ' '.join(tokens)
+        # return ' '.join(tokens)
+        return text
 
     def predict(self, text: str, return_attn=False) -> str:
         """
         text : сырой текст статьи/новости
         return: сгенерированная сводка
         """
-        src_tokens = self._encode(text)
-        src_tensor = torch.tensor(src_tokens,
-                                  dtype=torch.long,
-                                  device=self.device).unsqueeze(0)
 
+        generated = [self.cls_idx]
 
-        generated = [self.bos_idx]
+        source_embeddings, source_mask = get_embeddings_and_masks(text)
 
         for _ in range(self.max_len):
-            tgt_tensor = torch.tensor(generated,
-                                       dtype=torch.long,
-                                       device=self.device).unsqueeze(0)
+            
+            generated_text = self.tokenizer.decode(generated)
+            target_embeddings, target_mask = get_embeddings_and_masks(generated_text)
 
-            src_mask, tgt_mask = make_mask(src_tensor, tgt_tensor, self.pad_idx)
+            # tgt_tensor = torch.tensor(generated,
+            #                            dtype=torch.long,
+            #                            device='cpu').unsqueeze(0)
+            source_embeddings = source_embeddings.to('cpu')
+            target_embeddings = target_embeddings.to('cpu')
+            source_mask = source_mask.to('cpu')
+            target_mask = target_mask.to('cpu')
 
             with torch.no_grad():
                 if return_attn == False:
-                    logits = self.model(src_tensor, tgt_tensor, src_mask, tgt_mask)
+                    logits = self.model(source_embeddings, target_embeddings, source_mask, target_mask)
                 else:
-                    logits, attn = self.model(src_tensor, tgt_tensor, src_mask, tgt_mask, True)
+                    logits, attn = self.model(source_embeddings, target_embeddings,  source_mask, target_mask, True)
 
                 next_token = logits[0, -1].argmax(-1).item()
+                # print(next_token)
 
-            if next_token == self.eos_idx or len(generated) > 20:
-                break
-            # if len(generated) > 20:
-            #     break
+                # if next_token == self.tokenizer.sep_token:
+                #     break
 
             generated.append(next_token)
+            if next_token == self.tokenizer.sep_token or len(generated) > 20:
+                    break
 
-        # Декодируем обратно в строку (без <s>)
+        # Декодируем обратно в строку (без спецтокенов)
         if return_attn == False:
-            return self._decode(generated[1:])
+            return self._decode(generated[1:-1])
         else:
-            return self._decode(generated[1:]), attn
+            return self._decode(generated[1:-1]), attn

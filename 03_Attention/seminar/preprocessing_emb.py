@@ -51,6 +51,9 @@ def collate_fn(batch):
     # Возвращаем объект Batch
     return Batch(source_texts, target_texts)
 
+def subsequent_mask(size):
+    mask = torch.ones(size, size, device=DEVICE).triu_()
+    return mask.unsqueeze(0) == 0
 
 def preprocessing(data, batch_size=16):
     """
@@ -77,6 +80,7 @@ def get_embeddings_and_masks(texts):
     # texts — список строк (батч)
     tokenizer, model = get_model_and_tokenizer()
     encoded = tokenizer(texts, padding=True, truncation=True, return_tensors='pt')
+    # print('что-то закодированное', )
     input_ids = encoded['input_ids'].to(DEVICE)
     attention_mask = encoded['attention_mask'].to(DEVICE)
 
@@ -101,27 +105,52 @@ def get_embeddings_and_masks(texts):
 #     return source_embeddings, target_embeddings, source_mask, target_mask
 
 def convert_batch_with_pretrain_emb(batch):
+
     source_texts = batch.source  # список строк
     target_texts = batch.target
-
-    # Печатаем количество элементов в батче (сколько примеров)
-    print(f"Batch size (number of examples): source={len(source_texts)}, target={len(target_texts)}")
 
     source_embeddings, source_mask = get_embeddings_and_masks(source_texts)
     target_embeddings, target_mask = get_embeddings_and_masks(target_texts)
 
-    # Печатаем размерности эмбеддингов и масок
-    print(f"source_embeddings shape: {source_embeddings.shape}")  # [batch_size, seq_len, emb_dim]
-    print(f"source_mask shape: {source_mask.shape}")              # [batch_size, seq_len]
-    print(f"target_embeddings shape: {target_embeddings.shape}")
-    print(f"target_mask shape: {target_mask.shape}")
+    # # Печатаем размерности эмбеддингов и масок
+    # print(f"source_embeddings shape: {source_embeddings.shape}")  # [batch_size, seq_len, emb_dim]
+    # print(f"source_mask shape: {source_mask.shape}")              # [batch_size, seq_len]
+    # print(f"target_embeddings shape: {target_embeddings.shape}")
+    # print(f"target_mask shape: {target_mask.shape}")
 
     # Преобразуем attention_mask в формат, подходящий для масок в Transformer
-    source_mask = source_mask.unsqueeze(1).unsqueeze(2)
-    target_mask = target_mask.unsqueeze(1).unsqueeze(2)
+    # source_mask = source_mask.unsqueeze(1).unsqueeze(2)
+    target_mask = target_mask.unsqueeze(-2) & subsequent_mask(target_embeddings.size(-2)).type_as(target_mask)
 
+    source_mask = source_mask.unsqueeze(1)
     # Печатаем размерности после преобразования масок
-    print(f"Transformed source_mask shape: {source_mask.shape}")  # [batch_size, 1, 1, seq_len]
-    print(f"Transformed target_mask shape: {target_mask.shape}")
+    # print(f"Transformed source_mask shape: {source_mask.shape}")  # [batch_size, 1, 1, seq_len]
+    # print(f"Transformed target_mask shape: {target_mask.shape}")
 
     return source_embeddings, target_embeddings, source_mask, target_mask
+
+# def make_mask(source_inputs, target_inputs, pad_idx):
+#     source_mask = (source_inputs != pad_idx).unsqueeze(-2)
+#     target_mask = (target_inputs != pad_idx).unsqueeze(-2)
+#     target_mask = target_mask & subsequent_mask(target_inputs.size(-1)).type_as(target_mask)
+#     return source_mask, target_mask
+
+# def convert_batch_with_pretrain_emb(batch, pad_idx=1):
+
+#     source_texts = batch.source  # список строк
+#     target_texts = batch.target
+
+#     # Печатаем количество элементов в батче (сколько примеров)
+#     print(f"Batch size (number of examples): source={len(source_texts)}, target={len(target_texts)}")
+
+#     source_inputs, _ = get_embeddings_and_masks(source_texts)
+#     target_inputs, _ = get_embeddings_and_masks(target_texts)
+
+#     source_inputs, target_inputs = source_inputs.transpose(0, 1), target_inputs.transpose(0, 1)
+#     source_inputs, target_inputs = source_inputs.to(DEVICE).transpose(0, 1), target_inputs.to(DEVICE).transpose(0, 1)
+#     source_inputs, target_inputs = source_inputs.to(DEVICE), target_inputs.to(DEVICE)
+#     source_mask, target_mask = make_mask(source_inputs, target_inputs, pad_idx)
+
+#     print(f'размеры source_mask, target_mask: {source_mask.shape, target_mask.shape}')
+
+#     return source_inputs, target_inputs, source_mask, target_mask

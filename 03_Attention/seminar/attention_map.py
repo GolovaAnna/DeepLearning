@@ -19,12 +19,14 @@ def attention_map(summarizer, input_text, type):
 
     attn = attn[type][-1][0]
     avg_attn = attn.mean(dim=0)
-    word_field = summarizer.word_field
+    tokenizer = summarizer.tokenizer
 
     if type == 'encoder':
 
-        input_tokens = word_field.preprocess(input_text)
-        input_tokens = [word_field.init_token] + input_tokens + [word_field.eos_token]
+        input_ids = tokenizer(input_text)['input_ids']
+        input_tokens = [tokenizer.convert_ids_to_tokens(ids) for ids in input_ids]
+        input_tokens = input_tokens[:20]
+        avg_attn = avg_attn[:20, :20] 
 
         visualize_attention(
         input_sentence=input_tokens,
@@ -33,8 +35,9 @@ def attention_map(summarizer, input_text, type):
 
     if type == 'decoder_self':
 
-        output_tokens = word_field.preprocess(predict)
-        output_tokens = [word_field.init_token] + output_tokens
+        output_ids = tokenizer(predict)['input_ids']
+        output_tokens = [tokenizer.convert_ids_to_tokens(ids) for ids in output_ids]
+        print(output_tokens)
 
         visualize_attention(
         input_sentence=output_tokens,
@@ -44,14 +47,16 @@ def attention_map(summarizer, input_text, type):
 
     if type == 'decoder_enc':
 
-        input_tokens = word_field.preprocess(input_text)
-        input_tokens = [word_field.init_token] + input_tokens + [word_field.eos_token]
+        input_ids = tokenizer(input_text)['input_ids']
+        input_tokens = [tokenizer.convert_ids_to_tokens(ids) for ids in input_ids]
+        input_tokens = input_tokens[:20]
+        avg_attn = avg_attn[:20, :20] 
 
-        output_tokens = word_field.preprocess(predict)
-        output_tokens = [word_field.init_token] + output_tokens
+        output_ids = tokenizer(predict)['input_ids']
+        output_tokens = [tokenizer.convert_ids_to_tokens(ids) for ids in output_ids]
 
-    visualize_attention(
-        input_sentence=input_tokens,
-        output_sentence=output_tokens,
-        attention_weights=avg_attn,  # если батч внимания
-)
+        visualize_attention(
+            input_sentence=input_tokens,
+            output_sentence=output_tokens,
+            attention_weights=avg_attn, 
+        )

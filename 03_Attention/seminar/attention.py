@@ -50,10 +50,7 @@ class MultiHeadedAttention(nn.Module):
         x, self._attn_probs = self._attention(query, key, value, mask)
 
         x = x.transpose(1, 2).contiguous().view(nbatches, -1, self._heads_count * self._d_k)
-
         x = self._w_o(x)
-        print(f'heads count: {self._heads_count}')
-        print(x.shape)
         return x
     
 

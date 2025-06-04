@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import wandb
 
+DEVICE = torch.device('cuda')
+
 class LabelSmoothingLoss(nn.Module):
     def __init__(self, classes, smoothing=0.1, dim=-1, padding_idx=None):
         super(LabelSmoothingLoss, self).__init__()
@@ -23,6 +25,7 @@ class LabelSmoothingLoss(nn.Module):
 
         if self.padding_idx is not None:
             mask = (target != self.padding_idx)
+            mask = torch.tensor(mask).to(DEVICE)
             loss = loss.masked_select(mask)
 
         return loss.mean()

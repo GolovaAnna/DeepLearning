@@ -11,6 +11,8 @@ from preprocessing import convert_batch
 from preprocessing_emb import convert_batch_with_pretrain_emb
 from metrics import evaluate_rouge, log_rouge_to_wandb
 
+DEVICE = torch.device('cuda')
+
 class Generator(nn.Module):
     "Define standard linear + softmax generation step."
     def __init__(self, d_model, vocab):
@@ -29,8 +31,10 @@ class EncoderDecoder(nn.Module):
 
         self.embedding=embedding
         self.d_model = d_model
+        self.tokenizer=tokenizer
+        self.word_field = word_field
 
-        if word_field is not None:
+        if self.word_field is not None:
             if word_field.vocab.vectors is not None:
                 self.d_model = word_field.vocab.vectors.size(1)
                 if self.d_model == 300:
@@ -45,12 +49,12 @@ class EncoderDecoder(nn.Module):
             else:
                 self.embedding = nn.Embedding(vocab_size, self.d_model)
         
-        if tokenizer is not None:
-            vocab_size = len(tokenizer)
+        if self.tokenizer is not None:
+            vocab_size = len(self.tokenizer)
         else:
             vocab_size = None
 
-        print(f'self.d_model = {self.d_model}')
+        # print(f'self.d_model = {self.d_model}')
 
         self.encoder = Encoder(self.embedding, self.d_model, d_ff, blocks_count, heads_count, dropout_rate)
         self.decoder = Decoder(self.embedding, self.d_model, d_ff, blocks_count, heads_count, dropout_rate, vocab_size=vocab_size)
@@ -78,65 +82,75 @@ class EncoderDecoder(nn.Module):
 
 
 def do_epoch(model, criterion, data_iter, optimizer=None, name=None, global_step=0):
-    tqdm.get_lock().locks = []
     epoch_loss = 0
-    is_train = not optimizer is None
+    is_train = optimizer is not None
     name = name or ''
     model.train(is_train)
 
     batches_count = len(data_iter)
     global_step = 0
 
-    all_rouge_preds = []
-    all_rouge_targets = []
-
     with torch.autograd.set_grad_enabled(is_train):
         with tqdm(total=batches_count) as progress_bar:
             for i, batch in enumerate(data_iter):
-                print(type(batch))
-                # if model.embedding is not None:
-                #     source_inputs, target_inputs, source_mask, target_mask = convert_batch(batch)
-                # else:
-                source_inputs, target_inputs, source_mask, target_mask = convert_batch_with_pretrain_emb(batch) # check
+                if model.embedding is not None:
+                    source_inputs, target_inputs, source_mask, target_mask = convert_batch(batch)
+                else:
+                    source_inputs, target_inputs, source_mask, target_mask = convert_batch_with_pretrain_emb(batch)
 
-                logits = model.forward(source_inputs, target_inputs[:, :-1], source_mask, target_mask[:, :-1, :-1]) 
-                logits = logits.contiguous().view(-1, logits.shape[-1])  # 
-                target = target_inputs[:, 1:].contiguous().view(-1) # истинные индексы токенов
+                logits = model.forward(
+                    source_inputs, 
+                    target_inputs[:, :-1], 
+                    source_mask, 
+                    target_mask[:, :-1, :-1]
+                )
 
-                # inputs: (batch_size * seq_len, vocab_size) — вероятность каждого слова в каждом месте
+                logits_for_decoding = logits  # для декодирования до view
+
+                logits = logits.contiguous().view(-1, logits.shape[-1])
+
+                if model.tokenizer is not None:
+                    encoded = model.tokenizer(
+                        batch.target, 
+                        padding=True, 
+                        truncation=True, 
+                        return_tensors='pt'
+                    ).to(DEVICE)
+                    target = encoded['input_ids']
+
+                target = target[:, 1:].contiguous().view(-1)
 
                 loss = criterion(logits, target)
-                # print(logits)
-                # print(logits.shape)
-                # print(target)
-                # print(target.shape)
+                logits_ids = torch.argmax(logits_for_decoding, dim=-1)
 
-                logits = torch.argmax(logits, dim=-1)
-
-                # print(logits)
                 word_field = model.word_field
 
-                predicted_words = [word_field.vocab.itos[i] for i in logits]
-                target_words = [word_field.vocab.itos[i] for i in target] 
+                if word_field is not None:
+                    predicted_words = [word_field.vocab.itos[i] for i in logits_ids[0].detach().cpu().tolist()]
+                    target_words = [word_field.vocab.itos[i] for i in target.view(-1)[:logits_ids.size(1)].detach().cpu().tolist()]
 
-                # print(logits)
-
-                predicted_text = ' '.join(predicted_words)
-                target_text =  ' '.join(target_words)
-                
-                # print(predicted_text) - интересно смотреть как меняется в процессе
+                    predicted_text = ' '.join(predicted_words)
+                    target_text = ' '.join(target_words)
+                else:
+                    predicted_text = model.tokenizer.decode(
+                        logits_ids[0].detach().cpu(),
+                        skip_special_tokens=False  # как в оригинале
+                    )
+                    target_text = model.tokenizer.decode(
+                        target.view(-1)[:logits_ids.size(1)].detach().cpu(),
+                        skip_special_tokens=False  # как в оригинале
+                    )
 
                 rouge_scores = evaluate_rouge(predicted_text, target_text)
 
-                all_rouge_preds.extend(predicted_text)
-                all_rouge_targets.extend(target_text)
+                epoch_loss += loss.item()
 
-                epoch_loss += loss.item() 
-                if i % 10 == 0: 
+                if i % 10 == 0:
                     wandb.log({f'{name}_batch_loss': loss.item(), "step": global_step})
                     for k, v in rouge_scores.items():
                         wandb.log({f'{name}_batch_{k}': v, "step": global_step})
-                    log_rouge_to_wandb(rouge_scores)    
+                    log_rouge_to_wandb(rouge_scores)
+
                 global_step += 1
 
                 if optimizer:
@@ -145,17 +159,21 @@ def do_epoch(model, criterion, data_iter, optimizer=None, name=None, global_step
                     optimizer.step()
 
                 progress_bar.update()
-                progress_bar.set_description('{:>5s} Loss = {:.5f}, PPX = {:.2f}'.format(name, loss.item(),
-                                                                                         math.exp(loss.item())))
+                progress_bar.set_description(
+                    '{:>5s} Loss = {:.5f}, PPX = {:.2f}'.format(
+                        name, loss.item(), math.exp(loss.item()))
+                )
 
-            progress_bar.set_description('{:>5s} Loss = {:.5f}, PPX = {:.2f}'.format(
-                name, epoch_loss / batches_count, math.exp(epoch_loss / batches_count))
+            progress_bar.set_description(
+                '{:>5s} Loss = {:.5f}, PPX = {:.2f}'.format(
+                    name, epoch_loss / batches_count, math.exp(epoch_loss / batches_count))
             )
             progress_bar.refresh()
 
     avg_loss = epoch_loss / batches_count
     wandb.log({f'{name}_epoch_loss': avg_loss})
-    return avg_loss, global_step        
+    return avg_loss, global_step
+     
 
 
 def fit(model, criterion, optimizer, train_iter, epochs_count=1, val_iter=None):

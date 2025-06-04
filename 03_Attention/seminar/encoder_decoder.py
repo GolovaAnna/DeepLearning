@@ -43,13 +43,9 @@ class ResidualBlock(nn.Module):
         self._norm = LayerNorm(size)
         self._dropout = nn.Dropout(dropout_rate)
 
-        print(size)
-
     def forward(self, inputs, sublayer):
-        print(f"ResidualBlock input: {inputs.shape}")
         norm_out = self._norm(inputs)
         sublayer_out = sublayer(norm_out)
-        print(f"Sublayer output: {sublayer_out.shape}")
         return inputs + self._dropout(sublayer_out)  
         return inputs + self._dropout(sublayer(self._norm(inputs)))
     
