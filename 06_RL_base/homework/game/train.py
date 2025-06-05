@@ -171,7 +171,10 @@ def get_state(game):
         lower_pipe_1['x'] / SCREENWIDTH,
         lower_pipe_1['y'] / SCREENHEIGHT,
         game.playerx / SCREENWIDTH,
-        (upper_pipe_2['y'] + lower_pipe_2['y']) / 2,
+        upper_pipe_2['x'] / SCREENWIDTH,
+        upper_pipe_2['y'] / SCREENHEIGHT,
+        lower_pipe_2['x'] / SCREENWIDTH,
+        lower_pipe_2['y'] / SCREENHEIGHT,
         dy_to_gap_center
     ], dtype=np.float32)
 
@@ -181,7 +184,7 @@ def get_state(game):
 
 # === Пример игрового цикла ===
 
-agent = FlappyBirdAgent(state_dim=9, action_dim=2)
+agent = FlappyBirdAgent(state_dim=12, action_dim=2)
 
 # num_episodes = 1000
 # max_steps_per_episode = 10000

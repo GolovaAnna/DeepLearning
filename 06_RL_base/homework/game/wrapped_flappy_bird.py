@@ -89,16 +89,16 @@ class GameState:
         self.loopIter = (self.loopIter + 1) % 30
         self.basex = -((-self.basex + 100) % self.baseShift)
 
-        # # rotate player
-        # if self.playerRot > -90:
-        #     self.playerRot -= self.playerVelRot
+        # rotate player
+        if self.playerRot > -90:
+            self.playerRot -= self.playerVelRot
 
         # player's movement
         if self.playerVelY < self.playerMaxVelY and not self.playerFlapped:
             self.playerVelY += self.playerAccY
-        # if self.playerFlapped:
-        #     self.playerFlapped = False
-        #     self.playerRot += 45
+        if self.playerFlapped:
+            self.playerFlapped = False
+            self.playerRot += 45
         self.playery += min(self.playerVelY, BASEY - self.playery - PLAYER_HEIGHT)
         if self.playery < 0:
             self.playery = 0
